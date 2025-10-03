@@ -11,6 +11,7 @@ func Start() {
 	s := gin.Default()
 
 	s.POST("/NewTask", handlers.NewTask)
+	s.GET("/TaskStatus/:id", handlers.TaskStatus)
 
 	err := s.Run(":8080")
 	if err != nil {
