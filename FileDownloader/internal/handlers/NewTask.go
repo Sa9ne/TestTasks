@@ -21,36 +21,38 @@ func UniqueId() int {
 }
 
 // Функция для сохранения state.json
-func Loader(task models.Tasks) {
+func Loader(task *models.Tasks) error {
 	// Базовая директория
 	wd, _ := os.Getwd()
 	baseDir := filepath.Join(wd, "..", "downloads")
 	// Путь: downloads/Name_Id
 	taskDir := filepath.Join(baseDir, fmt.Sprintf("%s_%d", task.Name, task.Id))
+	stateFile := filepath.Join(taskDir, "state.json")
 
 	// Создаем папку
 	err := os.MkdirAll(taskDir, os.ModePerm)
 	if err != nil {
-		log.Printf("не удалось создать папку: %v", err)
-		return
+		return fmt.Errorf("не удалось создать папку: %v", err)
 	}
 
-	// Путь к state.json
-	stateFile := filepath.Join(taskDir, "state.json")
-
-	// Преобразуем task в JSON
+	// Преобразуем в JSON
 	data, err := json.MarshalIndent(task, "", "  ")
 	if err != nil {
-		log.Printf("не удалось создать папку: %v", err)
-		return
+		return fmt.Errorf("ошибка сериализации JSON: %v", err)
 	}
 
-	// Записываем в файл
-	err = os.WriteFile(stateFile, data, 0644)
-	if err != nil {
-		log.Printf("не удалось создать папку: %v", err)
-		return
+	// Чтобы не потерять файл при сбое — пишем во временный
+	tmpFile := stateFile + ".tmp"
+	if err := os.WriteFile(tmpFile, data, 0644); err != nil {
+		return fmt.Errorf("ошибка записи tmp файла: %v", err)
 	}
+
+	// Атомарно заменяем старый state.json новым
+	if err := os.Rename(tmpFile, stateFile); err != nil {
+		return fmt.Errorf("ошибка замены state файла: %v", err)
+	}
+
+	return nil
 }
 
 // Скачивание ссылок
@@ -64,23 +66,33 @@ func DownloadFiles(task *models.Tasks) {
 	wg := sync.WaitGroup{}
 	wg.Add(len(task.Links))
 
+	// Инициализация списка файлов
+	task.Files = make([]models.Files, len(task.Links))
 	for i, link := range task.Links {
 		// берём расширение из URL
 		ext := filepath.Ext(link)
 		if ext == "" {
 			ext = ".dat" // дефолт, если расширения нет
 		}
-
 		filename := fmt.Sprintf("file_%d%s", i+1, ext)
+
+		task.Files[i] = models.Files{
+			Url:      link,
+			FileName: filename,
+			Status:   "Processing",
+		}
+
 		savePath := filepath.Join(taskDir, filename)
 
-		go func(url, path string) {
+		go func(index int, url, path string) {
 			defer wg.Done()
 
 			// Скачиваем содержимое
 			resp, err := http.Get(url)
 			if err != nil {
 				log.Printf("Ошибка скачивания %s: %v", url, err)
+				task.Files[index].Status = "Error"
+				Loader(task)
 				return
 			}
 			defer resp.Body.Close()
@@ -88,6 +100,8 @@ func DownloadFiles(task *models.Tasks) {
 			// Проверяем код ответа
 			if resp.StatusCode != http.StatusOK {
 				log.Printf("Неуспешный ответ %d при скачивании %s", resp.StatusCode, url)
+				task.Files[index].Status = "Error"
+				Loader(task)
 				return
 			}
 
@@ -95,6 +109,8 @@ func DownloadFiles(task *models.Tasks) {
 			out, err := os.Create(path)
 			if err != nil {
 				log.Printf("Ошибка создания файла %s: %v", path, err)
+				task.Files[index].Status = "Error"
+				Loader(task)
 				return
 			}
 			defer out.Close()
@@ -103,11 +119,16 @@ func DownloadFiles(task *models.Tasks) {
 			_, err = io.Copy(out, resp.Body)
 			if err != nil {
 				log.Printf("Ошибка записи файла %s: %v", path, err)
+				task.Files[index].Status = "Error"
+				Loader(task)
 				return
 			}
 
+			// Сохраняем изменения для каждого файла
+			task.Files[index].Status = "Done"
+			Loader(task)
 			log.Printf("Файл сохранён: %s", path)
-		}(link, savePath)
+		}(i, link, savePath)
 	}
 
 	// Ждём окончания всех загрузок
@@ -115,7 +136,7 @@ func DownloadFiles(task *models.Tasks) {
 
 	// Обновляем статус загрузки
 	task.Status = "Done"
-	Loader(*task)
+	Loader(task)
 
 	// Сообщение пользователю
 	log.Printf("Все файлы для задачи %s_%d скачаны", task.Name, task.Id)
@@ -134,15 +155,26 @@ func NewTask(ctx *gin.Context) {
 		return
 	}
 
+	// Записываем все ссылки в отдельные структуры, для сохранения статуса каждой из них
+	files := make([]models.Files, len(input.Links))
+	for i, links := range input.Links {
+		files[i] = models.Files{
+			Url:      links,
+			FileName: fmt.Sprintf("file_%d%s", i+1, filepath.Ext(links)),
+			Status:   "Processing",
+		}
+	}
+
 	// Создаем переменную task с введенной информацией пользователя
 	task := models.Tasks{
 		Id:     UniqueId(),
 		Name:   input.Name,
 		Links:  input.Links,
+		Files:  files,
 		Status: "Processing",
 	}
 
-	Loader(task)
+	Loader(&task)
 	go DownloadFiles(&task)
 	ctx.JSON(http.StatusOK, gin.H{"Message": "Task started", "id": task.Id})
 }

@@ -13,6 +13,9 @@ func Start() {
 	s.POST("/NewTask", handlers.NewTask)
 	s.GET("/TaskStatus/:id", handlers.TaskStatus)
 
+	// Восстановление не завершенных задач
+	handlers.RecoverUnfinishedTasks()
+
 	err := s.Run(":8080")
 	if err != nil {
 		log.Fatalf("Server was not started:%v", err)
