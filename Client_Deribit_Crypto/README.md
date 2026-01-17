@@ -4,6 +4,16 @@
 
 ---
 
+## Design Decisions
+
+- Использован Celery + Redis для периодического получения цен, чтобы не блокировать основной поток.
+- Асинхронные функции `fetch_price_btc` и `fetch_price_eth` используют `asyncio` для одновременных запросов к API Deribit.
+- SQLAlchemy используется для ORM и удобного взаимодействия с PostgreSQL.
+- Все цены сохраняются с UNIX timestamp, что упрощает фильтрацию по времени.
+- FastAPI для внешнего API — легкий, быстрый и удобный фреймворк.
+
+---
+
 ## Структура проекта
 
 ```
@@ -19,7 +29,12 @@ Client_Deribit_Crypto/
 │   └── tasks.py            # задачи Celery
 │
 ├── models/                 # ORM модели базы данных
+│   ├── models.py
+│   └── __init__.py
 ├── routes/                 # Роуты для API
+│   ├── btc_price.py
+│   ├── eth_price.py
+│   └── __init__.py
 ├── main.py                 # точка входа приложения (если нужна)
 ├── database.py             # подключение к PostgreSQL через SQLAlchemy
 ├──__init__.py
@@ -88,7 +103,13 @@ postgres = Пользователь бд
 export PYTHONPATH="$PWD"
 ```
 
-4. **Запуск Celery (Worker + Beat вместе, разработка):**
+4. **Запуск Redis**
+
+```
+redis-server
+```
+
+5. **Запуск Celery (Worker + Beat вместе, разработка):**
 
 ```
 celery -A core.celery_app:celery_app worker -B -l info
