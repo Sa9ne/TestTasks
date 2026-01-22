@@ -1,0 +1,26 @@
+services:
+  test-service:
+    build: 
+      context: ./TestTaskService
+    container_name: golang
+    ports:
+      - "8080:8080"
+    env_file:
+      - .env
+    depends_on:
+      - db
+
+  db:
+    image: postgres:17
+    container_name: db
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      - "5433:5432"
+    volumes:
+      - db_data:/var/lib/postgresql/data
+      
+volumes:
+  db_data:
