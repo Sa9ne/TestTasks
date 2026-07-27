@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Скачивание и анализ файлов</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+    margin: 0; background: #f5f6f8; color: #1c1e21;
+  }
+  header {
+    background: #1c1e21; color: #fff; padding: 16px 24px;
+    display: flex; gap: 24px; align-items: center;
+  }
+  header h1 { font-size: 18px; margin: 0; margin-right: auto; }
+  .tab-btn {
+    background: none; border: none; color: #bbb; font-size: 15px;
+    cursor: pointer; padding: 8px 4px;
+  }
+  .tab-btn.active { color: #fff; border-bottom: 2px solid #4f9dff; }
+  main { max-width: 960px; margin: 24px auto; padding: 0 16px; }
+  .card {
+    background: #fff; border-radius: 10px; padding: 24px;
+    box-shadow: 0 1px 3px rgba(0,0,0,.08); margin-bottom: 20px;
+  }
+  button.primary {
+    background: #4f9dff; color: #fff; border: none; border-radius: 6px;
+    padding: 10px 20px; font-size: 15px; cursor: pointer;
+  }
+  button.primary:disabled { background: #a9c9f0; cursor: default; }
+  button.secondary {
+    background: #eef1f5; color: #1c1e21; border: none; border-radius: 6px;
+    padding: 8px 14px; font-size: 14px; cursor: pointer; margin-right: 8px;
+  }
+  .progress-row { margin-top: 16px; font-size: 14px; line-height: 1.8; }
+  .progress-bar-outer {
+    background: #eef1f5; border-radius: 6px; height: 10px; margin-top: 6px; overflow: hidden;
+  }
+  .progress-bar-inner { background: #4f9dff; height: 100%; width: 0%; transition: width .3s; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #eef1f5; }
+  th { color: #666; font-weight: 600; cursor: pointer; user-select: none; }
+  .pagination { display: flex; gap: 6px; margin-top: 14px; align-items: center; }
+  .pagination button {
+    border: 1px solid #ddd; background: #fff; border-radius: 4px; padding: 4px 10px; cursor: pointer;
+  }
+  .pagination button.active { background: #4f9dff; color: #fff; border-color: #4f9dff; }
+  .toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
+  .hidden { display: none; }
+  .stat-grid {
+    display: grid; grid-template-columns: repeat(10, 1fr); gap: 8px; margin-top: 10px;
+  }
+  .digit-box {
+    background: #eef1f5; border-radius: 6px; text-align: center; padding: 8px 0;
+  }
+  .digit-box .d { font-size: 12px; color: #888; }
+  .digit-box .n { font-size: 16px; font-weight: 600; }
+  .muted { color: #888; font-size: 13px; }
+  .error-box { background: #fdecea; color: #c0392b; padding: 10px 14px; border-radius: 6px; margin-top: 12px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Скачивание и анализ файлов</h1>
+  <button class="tab-btn active" id="tabBtnDownload" onclick="showTab('download')">Скачивание</button>
+  <button class="tab-btn" id="tabBtnFiles" onclick="showTab('files')">Файлы и расчёты</button>
+</header>
+
+<main>
+
+  <!-- ================= TAB 1: DOWNLOAD ================= -->
+  <section id="tabDownload" class="card">
+    <button class="primary" id="startBtn" onclick="startDownload()">Скачать данные</button>
+    <div class="progress-row">
+      <div>Старт (время НСК): <b id="startTime">—</b></div>
+      <div id="progressText">Ожидание запуска…</div>
+      <div class="progress-bar-outer"><div class="progress-bar-inner" id="progressBar"></div></div>
+    </div>
+    <div id="downloadError"></div>
+  </section>
+
+  <!-- ================= TAB 2: FILES / STATS ================= -->
+  <section id="tabFiles" class="card hidden">
+    <div class="toolbar">
+      <button class="secondary" onclick="selectOnPage()">Выбрать на странице</button>
+      <button class="secondary" onclick="selectAll()">Выбрать все</button>
+      <button class="secondary" onclick="selectNone()">Снять выбор</button>
+      <span class="muted" id="selectedCount">Выбрано: 0</span>
+      <button class="primary" style="margin-left:auto" onclick="calculate()">Произвести расчёты</button>
+    </div>
+
+    <table>
+      <thead>
+        <tr>
+          <th style="width:30px"></th>
+          <th>Имя файла</th>
+          <th onclick="toggleSort()">Время скачивания ⇅</th>
+        </tr>
+      </thead>
+      <tbody id="filesTbody"></tbody>
+    </table>
+
+    <div class="pagination" id="pagination"></div>
+
+    <div id="statsResult"></div>
+  </section>
+
+</main>
+
+<script>
+// ---------------- Tabs ----------------
+function showTab(name) {
+  document.getElementById('tabDownload').classList.toggle('hidden', name !== 'download');
+  document.getElementById('tabFiles').classList.toggle('hidden', name !== 'files');
+  document.getElementById('tabBtnDownload').classList.toggle('active', name === 'download');
+  document.getElementById('tabBtnFiles').classList.toggle('active', name === 'files');
+  if (name === 'files') loadFiles();
+}
+
+// ---------------- Tab 1: download ----------------
+let pollTimer = null;
+
+async function startDownload() {
+  document.getElementById('downloadError').innerHTML = '';
+  const res = await fetch('/api/start-download', { method: 'POST' });
+  const data = await res.json();
+  if (!data.ok) {
+    document.getElementById('progressText').textContent = data.message || 'Не удалось запустить';
+    return;
+  }
+  document.getElementById('startBtn').disabled = true;
+  if (pollTimer) clearInterval(pollTimer);
+  pollTimer = setInterval(pollProgress, 1000);
+  pollProgress();
+}
+
+async function pollProgress() {
+  const res = await fetch('/api/progress');
+  const p = await res.json();
+
+  document.getElementById('startTime').textContent = p.start_time_nsk || '—';
+
+  if (p.status === 'idle') {
+    document.getElementById('progressText').textContent = 'Ожидание запуска…';
+  } else if (p.status === 'running') {
+    document.getElementById('progressText').textContent =
+      `получено ${p.total_names_seen} названий файлов, скачано ${p.downloaded_count} из ${p.total_names_seen}`;
+  } else if (p.status === 'done') {
+    document.getElementById('progressText').textContent =
+      `Готово. Скачано ${p.downloaded_count} из ${p.total_names_seen} файлов.`;
+    clearInterval(pollTimer);
+    document.getElementById('startBtn').disabled = false;
+  } else if (p.status === 'error') {
+    document.getElementById('progressText').textContent = 'Остановлено из-за ошибки.';
+    document.getElementById('downloadError').innerHTML =
+      `<div class="error-box">${p.error || 'Неизвестная ошибка'}</div>`;
+    clearInterval(pollTimer);
+    document.getElementById('startBtn').disabled = false;
+  }
+
+  const pct = p.total_names_seen ? Math.round(100 * p.downloaded_count / p.total_names_seen) : 0;
+  document.getElementById('progressBar').style.width = pct + '%';
+}
+
+// ---------------- Tab 2: files & stats ----------------
+let currentPage = 1;
+const pageSize = 20;
+let sortDir = 'desc';
+let totalFiles = 0;
+let selected = new Set();     // selected filenames, works across pages
+let allSelectedFlag = false;  // "select absolutely all" mode
+
+async function loadFiles() {
+  const res = await fetch(`/api/downloaded-files?page=${currentPage}&page_size=${pageSize}&sort=${sortDir}`);
+  const data = await res.json();
+  totalFiles = data.total;
+  renderTable(data.items);
+  renderPagination();
+  updateSelectedCount();
+}
+
+function renderTable(items) {
+  const tbody = document.getElementById('filesTbody');
+  tbody.innerHTML = '';
+  items.forEach(item => {
+    const tr = document.createElement('tr');
+    const checked = allSelectedFlag || selected.has(item.name);
+    tr.innerHTML = `
+      <td><input type="checkbox" data-name="${item.name}" ${checked ? 'checked' : ''}
+           onchange="toggleOne('${item.name}', this.checked)"></td>
+      <td>${item.name}</td>
+      <td>${item.downloaded_at}</td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+function renderPagination() {
+  const totalPages = Math.max(1, Math.ceil(totalFiles / pageSize));
+  const el = document.getElementById('pagination');
+  el.innerHTML = '';
+  for (let i = 1; i <= totalPages; i++) {
+    const btn = document.createElement('button');
+    btn.textContent = i;
+    if (i === currentPage) btn.classList.add('active');
+    btn.onclick = () => { currentPage = i; loadFiles(); };
+    el.appendChild(btn);
+  }
+}
+
+function toggleSort() {
+  sortDir = sortDir === 'desc' ? 'asc' : 'desc';
+  currentPage = 1;
+  loadFiles();
+}
+
+function toggleOne(name, checked) {
+  allSelectedFlag = false;
+  if (checked) selected.add(name); else selected.delete(name);
+  updateSelectedCount();
+}
+
+function selectOnPage() {
+  allSelectedFlag = false;
+  document.querySelectorAll('#filesTbody input[type=checkbox]').forEach(cb => {
+    cb.checked = true;
+    selected.add(cb.dataset.name);
+  });
+  updateSelectedCount();
+}
+
+function selectAll() {
+  // "select absolutely all" — including files on pages we haven't loaded
+  allSelectedFlag = true;
+  document.querySelectorAll('#filesTbody input[type=checkbox]').forEach(cb => cb.checked = true);
+  updateSelectedCount();
+}
+
+function selectNone() {
+  allSelectedFlag = false;
+  selected.clear();
+  document.querySelectorAll('#filesTbody input[type=checkbox]').forEach(cb => cb.checked = false);
+  updateSelectedCount();
+}
+
+function updateSelectedCount() {
+  const count = allSelectedFlag ? totalFiles : selected.size;
+  document.getElementById('selectedCount').textContent = `Выбрано: ${count}`;
+}
+
+async function getSelectedNames() {
+  if (allSelectedFlag) {
+    // fetch every file name across all pages
+    const res = await fetch(`/api/downloaded-files?page=1&page_size=${totalFiles || 1}&sort=${sortDir}`);
+    const data = await res.json();
+    return data.items.map(i => i.name);
+  }
+  return Array.from(selected);
+}
+
+async function calculate() {
+  const names = await getSelectedNames();
+  if (names.length === 0) {
+    alert('Выберите хотя бы один файл');
+    return;
+  }
+  const res = await fetch('/api/calculate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ names })
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    document.getElementById('statsResult').innerHTML =
+      `<div class="error-box">${err.detail || 'Ошибка расчёта'}</div>`;
+    return;
+  }
+  const data = await res.json();
+  renderStats(data);
+}
+
+function digitGrid(counts) {
+  let html = '<div class="stat-grid">';
+  for (let d = 0; d <= 9; d++) {
+    html += `<div class="digit-box"><div class="d">${d}</div><div class="n">${counts[d] ?? 0}</div></div>`;
+  }
+  html += '</div>';
+  return html;
+}
+
+function renderStats(data) {
+  let html = '<h3>Общая статистика по всем выбранным файлам</h3>';
+  html += digitGrid(data.total);
+
+  html += '<h3 style="margin-top:24px">Статистика по файлам</h3>';
+  for (const [name, counts] of Object.entries(data.per_file)) {
+    html += `<div style="margin-top:14px"><b>${name}</b>${digitGrid(counts)}</div>`;
+  }
+  document.getElementById('statsResult').innerHTML = html;
+}
+</script>
+</body>
+</html>
